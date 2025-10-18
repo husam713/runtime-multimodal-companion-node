@@ -3,18 +3,15 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
-import { GraphBuilder, RemoteLLMChatNode } from '@inworld/runtime/graph';
-import { TEXT_CONFIG } from './constants';
 import dotenv from 'dotenv';
-import { ContentInterface } from '@inworld/runtime';
-import { VADFactory } from '@inworld/runtime/primitives/vad';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { parse } from 'url';
 import { RawData } from 'ws';
-import { MessageHandler } from './message_handler';
-import { STTGraph } from './stt_graph';
 import { authMiddleware, verifyIncomingRequest } from './auth';
+import { getChatCompletion } from './services/openai_gpt4';
+import { transcribeAudio } from './services/openai_whisper';
+import { textToSpeech } from './services/openai_tts';
 dotenv.config();
 
 const upload = multer({ dest: 'uploads/' });
@@ -35,89 +32,10 @@ app.use((req, res, next) => {
   }
 });
 
-let vadClient: any;
-let sttGraph: STTGraph;
 const connections: { [key: string]: { ws?: any } } = {};
 // Short-lived WS tokens issued after HTTP auth; validated during WS upgrade
 const wsTokens: { [sessionKey: string]: { token: string; expiresAt: number } } = {};
 const WS_TOKEN_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-function createMessages(
-  prompt: string,
-  imageUrl?: string,
-) {
-  const systemMessage = {
-    role: 'system',
-    content:
-      'You are a helpful assistant.',
-  };
-
-  let userMessage;
-  if (imageUrl) {
-    userMessage = {
-      role: 'user',
-      content: [
-        {
-          type: 'text' as const,
-          text: prompt,
-        },
-        {
-          type: 'image' as const,
-          image_url: {
-            url: imageUrl,
-            detail: 'high',
-          },
-        },
-      ],
-    };
-  } else {
-    userMessage = {
-      role: 'user',
-      content: prompt,
-    };
-  }
-
-  return {
-    messages: [systemMessage, userMessage],
-  };
-}
-
-// WebSocket connection handler
-webSocket.on('connection', (ws, request) => {
-  const { query } = parse(request.url!, true);
-  const key = query.key?.toString();
-
-  if (!key) {
-    ws.close(4000, 'Session key required');
-    return;
-  }
-
-  if (!connections[key]) {
-    connections[key] = {};
-  }
-
-  connections[key].ws = ws;
-  console.log(`WebSocket connected for session: ${key}`);
-
-  ws.on('error', console.error);
-
-  const messageHandler = new MessageHandler(
-    sttGraph,
-    vadClient,
-    (data: any) => ws.send(JSON.stringify(data))
-  );
-
-  ws.on('message', (data: RawData) => {
-    messageHandler.handleMessage(data, key);
-  });
-
-  ws.on('close', () => {
-    console.log(`WebSocket disconnected for session: ${key}`);
-    if (connections[key]) {
-      delete connections[key];
-    }
-  });
-});
 
 // Serve test HTML files
 function resolveStaticFile(relativePath: string) {
@@ -162,60 +80,110 @@ app.get('/get_access_token', (req, res) => {
   res.json({ sessionKey, wsToken });
 });
 
-// Protect chat endpoint as well
-app.post('/chat', authMiddleware, upload.single('image'), async (req, res) => {
+app.post('/chat', authMiddleware, async (req, res) => {
   try {
-    console.log("Received request:", req.body);
-    const prompt = req.body.prompt;
-    const imageFile = req.file;
+    const { prompt } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ error: 'Missing prompt' });
     }
 
-    let imageUrl;
-    if (imageFile) {
-      const imageBuffer = fs.readFileSync(imageFile.path);
-      const base64Image = imageBuffer.toString('base64');
-      const mimeType = imageFile.mimetype;
-      imageUrl = `data:${mimeType};base64,${base64Image}`;
-    }
+    const response = await getChatCompletion(prompt);
 
-    const llmNode = new RemoteLLMChatNode({
-      id: uuidv4() + '_llm_node',      
-        provider: 'google', // 'openai'
-        modelName: 'gemini-2.5-flash-lite', // 'gpt-4o-mini'
-        stream: false,
-        textGenerationConfig: TEXT_CONFIG,      
+    unrealEngineWebSocket.clients.forEach(client => {
+      if (client.readyState === 1) {
+        client.send(response);
+      }
     });
 
-    const executor = new GraphBuilder({ 
-      id: 'http_llm_chat_graph',
-      apiKey: process.env.INWORLD_API_KEY!
-    })
-      .addNode(llmNode)
-      .setStartNode(llmNode)
-      .setEndNode(llmNode)
-      .build();
+    res.json({ response });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    const input = {
-      ...createMessages(prompt, imageUrl),
-    };
+app.post('/transcribe', authMiddleware, upload.single('audio'), async (req, res) => {
+  try {
+    const audioFile = req.file;
 
-    console.log("Executing graph with input:", input);
-    const outputStream = await executor.start(input, uuidv4());
-
-    let output = '';
-    console.log("Processing output stream...");
-    for await (const result of outputStream) {
-      if (result.data && (result.data as ContentInterface).content) {
-        output = (result.data as ContentInterface).content;
-      }
-      console.log("Received result:", result);
+    if (!audioFile) {
+      return res.status(400).json({ error: 'Missing audio file' });
     }
 
-    fs.unlinkSync(imageFile?.path); // clean up
-    res.json({ response: output });
+    const transcription = await transcribeAudio(audioFile.path);
+    fs.unlinkSync(audioFile.path); // clean up
+    res.json({ transcription });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/text-to-speech', authMiddleware, async (req, res) => {
+  try {
+    const { text } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: 'Missing text' });
+    }
+
+    const speechFile = await textToSpeech(text);
+    res.sendFile(speechFile);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// TODO: Connect to Epic API
+async function scheduleAppointment(details: any) {
+  console.log('Scheduling appointment with details:', details);
+  // Simulate API call
+  return Promise.resolve({
+    success: true,
+    appointment: {
+      id: uuidv4(),
+      ...details,
+      status: 'confirmed',
+    },
+  });
+}
+
+// TODO: Connect to Epic API
+async function fetchMedicalRecords(patientId: string) {
+  console.log('Fetching medical records for patient:', patientId);
+  // Simulate API call
+  return Promise.resolve({
+    success: true,
+    records: [
+      {
+        id: uuidv4(),
+        patientId,
+        date: '2023-10-26',
+        doctor: 'Dr. Smith',
+        notes: 'Patient reported feeling tired.',
+      },
+    ],
+  });
+}
+
+app.post('/schedule-appointment', authMiddleware, async (req, res) => {
+  try {
+    const details = req.body;
+    const result = await scheduleAppointment(details);
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/fetch-medical-records/:patientId', authMiddleware, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const result = await fetchMedicalRecords(patientId);
+    res.json(result);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -275,51 +243,18 @@ server.on('upgrade', async (request, socket, head) => {
   }
 });
 
+const unrealEngineWebSocket = new WebSocketServer({ port: 8081 });
+
+unrealEngineWebSocket.on('connection', ws => {
+  console.log('Unreal Engine client connected');
+  ws.on('message', message => {
+    console.log('received: %s', message);
+  });
+
+  ws.send('something');
+});
+
 server.listen(PORT, async () => {
-  try {
-    // Initialize VAD client
-    vadClient = await VADFactory.createLocal({
-      modelPath: process.env.VAD_MODEL_PATH,
-    });
-    console.log('VAD client initialized');
-
-    // Initialize STT Graph (requires TTS params even for STT-only usage)
-    sttGraph = await STTGraph.create({
-      apiKey: process.env.INWORLD_API_KEY!,
-      dialogPromptTemplate: '',
-      graphVisualizationEnabled: false,
-      connections: {},
-    });
-    console.log('STT Graph initialized');
-    
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`WebSocket available at ws://localhost:${PORT}/ws?key=<session_key>`);
-  } catch (error) {
-    console.error('Failed to initialize server:', error);
-    process.exit(1);
-  }
-});
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('Shutting down server...');
-  if (sttGraph) {
-    sttGraph.destroy();
-  }
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGTERM', () => {
-  console.log('Shutting down server...');
-  if (sttGraph) {
-    sttGraph.destroy();
-  }
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
+  console.log(`Server running on http://localhost:${PORT}`);
 });
 

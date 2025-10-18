@@ -6,9 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js"
-    },
+  },
   "dependencies": {
-    "@inworld/runtime": "https://assets.inworld.ai/node-packages/inworld-runtime-0.5.0-rc.3.tgz",
     "@types/dotenv": "^8.2.3",
     "@types/express": "^5.0.3",
     "@types/multer": "^2.0.0",
@@ -17,6 +16,7 @@
     "express": "^5.1.0",
     "form-data": "^4.0.4",
     "multer": "^2.0.2",
+    "openai": "^6.5.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2",
     "uuid": "^11.1.0",

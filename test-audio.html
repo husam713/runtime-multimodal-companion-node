@@ -1,76 +1,110 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>STT WebSocket Test</title>
+    <title>Medical AI Assistant</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #f4f7f9;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        #container {
+            width: 100%;
             max-width: 800px;
-            margin: 50px auto;
-            padding: 20px;
+            background-color: #fff;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            padding: 2rem;
+            box-sizing: border-box;
+        }
+        h1 {
+            color: #007aff;
+            text-align: center;
+        }
+        p {
+            text-align: center;
+            color: #666;
+        }
+        #controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
         }
         button {
-            padding: 10px 20px;
-            margin: 10px;
-            font-size: 16px;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
             border: none;
-            border-radius: 5px;
+            border-radius: 25px;
             cursor: pointer;
-        }
-        #start {
-            background-color: #4CAF50;
+            background-color: #007aff;
             color: white;
+            transition: background-color 0.3s ease;
         }
-        #stop {
-            background-color: #f44336;
-            color: white;
+        button:hover {
+            background-color: #0056b3;
         }
         button:disabled {
-            background-color: #cccccc;
+            background-color: #cddc39;
             cursor: not-allowed;
         }
         #status {
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-        .connected {
-            background-color: #d4edda;
-            color: #155724;
-        }
-        .disconnected {
-            background-color: #f8d7da;
-            color: #721c24;
+            text-align: center;
+            margin-bottom: 1rem;
+            color: #666;
         }
         #results {
-            border: 1px solid #ccc;
-            padding: 15px;
-            min-height: 200px;
-            max-height: 400px;
+            border: 1px solid #e0e0e0;
+            padding: 1rem;
+            height: 300px;
             overflow-y: auto;
             background-color: #f9f9f9;
-            margin-top: 20px;
+            border-radius: 8px;
         }
         .message {
-            margin: 5px 0;
-            padding: 5px;
-            border-left: 3px solid #007bff;
-            background-color: white;
+            padding: 0.5rem 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 15px;
+        }
+        .You {
+            background-color: #007aff;
+            color: white;
+            align-self: flex-end;
+            text-align: right;
+        }
+        .Eva {
+            background-color: #e5e5ea;
+            color: #333;
+            align-self: flex-start;
         }
         .error {
-            border-left-color: #dc3545;
-            background-color: #f8d7da;
+            background-color: #ff3b30;
+            color: white;
         }
-        .text-message {
-            border-left-color: #28a745;
-            background-color: #d4edda;
+        input[type="text"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+        audio {
+            width: 100%;
+            margin-top: 1rem;
         }
     </style>
 </head>
 <body>
-    <h1>Speech-to-Text WebSocket Test</h1>
-    <p>This page will test the WebSocket STT functionality of your demo server.</p>
+    <div id="container">
+        <h1>Medical AI Assistant</h1>
+        <p>Your personal health companion, powered by AI.</p>
     
     <div>
         <button id="start">🎤 Start Recording</button>
@@ -84,188 +118,107 @@
     <div id="results"></div>
 
     <script>
-        let ws;
         let mediaRecorder;
-        let audioContext;
-        let sessionKey;
-        let wsToken;
+        let audioChunks = [];
         let isRecording = false;
-        
+
         const statusDiv = document.getElementById('status');
         const resultsDiv = document.getElementById('results');
         const startBtn = document.getElementById('start');
         const stopBtn = document.getElementById('stop');
         const clearBtn = document.getElementById('clear');
-        
-        // Add message to results
+        const textInput = document.createElement('input');
+        textInput.type = 'text';
+        textInput.placeholder = 'Or type your message here';
+        const sendBtn = document.createElement('button');
+        sendBtn.textContent = 'Send';
+        const audioPlayer = document.createElement('audio');
+        audioPlayer.controls = true;
+
+        document.querySelector('div').appendChild(textInput);
+        document.querySelector('div').appendChild(sendBtn);
+        document.body.appendChild(audioPlayer);
+
         function addMessage(type, data) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${type}`;
-            messageDiv.innerHTML = `
-                <strong>${new Date().toLocaleTimeString()}</strong> - 
-                <strong>${data.type || type}:</strong> 
-                ${JSON.stringify(data, null, 2)}
-            `;
+            messageDiv.innerHTML = `<strong>${type}:</strong> ${data}`;
             resultsDiv.appendChild(messageDiv);
-            resultsDiv.scrollTop = resultsDiv.scrollHeight;
         }
-        
-        // Initialize WebSocket connection
-        async function initializeConnection() {
+
+        async function sendToServer(prompt) {
             try {
-                statusDiv.textContent = 'Connecting...';
-                statusDiv.className = 'disconnected';
-                
-                const response = await fetch('/get_access_token', { method: 'GET' });
-                if (!response.ok) {
-                    const msg = await response.text();
-                    throw new Error(`Failed to get access token: ${msg}`);
-                }
-                const data = await response.json();
-                sessionKey = data.sessionKey;
-                wsToken = data.wsToken;
-                
-                const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
-                const wsUrl = `${wsProtocol}://${location.host}/ws?key=${encodeURIComponent(sessionKey)}${wsToken ? `&wsToken=${encodeURIComponent(wsToken)}` : ''}`;
-                ws = new WebSocket(wsUrl);
-                
-                ws.onopen = () => {
-                    statusDiv.textContent = `Connected (Session: ${sessionKey})`;
-                    statusDiv.className = 'connected';
-                    startBtn.disabled = false;
-                    addMessage('info', { message: 'WebSocket connected successfully' });
-                };
-                
-                ws.onmessage = (event) => {
-                    const data = JSON.parse(event.data);
-                    console.log('Received:', data);
-                    
-                    if (data.type === 'TEXT') {
-                        addMessage('text-message', data);
-                    } else if (data.type === 'ERROR') {
-                        addMessage('error', data);
-                    } else {
-                        addMessage('message', data);
-                    }
-                };
-                
-                ws.onclose = () => {
-                    statusDiv.textContent = 'Disconnected';
-                    statusDiv.className = 'disconnected';
-                    startBtn.disabled = true;
-                    stopBtn.disabled = true;
-                    addMessage('error', { message: 'WebSocket connection closed' });
-                };
-                
-                ws.onerror = (error) => {
-                    addMessage('error', { message: 'WebSocket error', error: error.toString() });
-                };
-                
-            } catch (error) {
-                addMessage('error', { message: 'Failed to connect', error: error.toString() });
-                statusDiv.textContent = 'Connection failed';
-                statusDiv.className = 'disconnected';
-            }
-        }
-        
-        // Convert audio buffer to the format expected by the server
-        function processAudioBuffer(audioBuffer) {
-            // Convert from the browser's audio format to 16kHz mono PCM
-            const sampleRate = audioBuffer.sampleRate;
-            const inputBuffer = audioBuffer.getChannelData(0); // Get mono channel
-            
-            // Resample to 16kHz if needed
-            const targetSampleRate = 16000;
-            let outputBuffer;
-            
-            if (sampleRate !== targetSampleRate) {
-                const ratio = sampleRate / targetSampleRate;
-                const outputLength = Math.floor(inputBuffer.length / ratio);
-                outputBuffer = new Float32Array(outputLength);
-                
-                for (let i = 0; i < outputLength; i++) {
-                    const sourceIndex = Math.floor(i * ratio);
-                    outputBuffer[i] = inputBuffer[sourceIndex];
-                }
-            } else {
-                outputBuffer = inputBuffer;
-            }
-            
-            return Array.from(outputBuffer);
-        }
-        
-        // Start recording
-        startBtn.onclick = async () => {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: {
-                        sampleRate: 16000,
-                        channelCount: 1,
-                        echoCancellation: true,
-                        noiseSuppression: true
-                    }
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt }),
                 });
-                
-                audioContext = new AudioContext({ sampleRate: 16000 });
-                const source = audioContext.createMediaStreamSource(stream);
-                
-                // Create a script processor to capture audio
-                const processor = audioContext.createScriptProcessor(1024, 1, 1);
-                
-                processor.onaudioprocess = (event) => {
-                    if (isRecording) {
-                        const inputBuffer = event.inputBuffer;
-                        const audioData = processAudioBuffer(inputBuffer);
-                        
-                        // Send audio data to server
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({
-                                type: 'audio',
-                                audio: [audioData] // Wrap in array as expected by server
-                            }));
-                        }
-                    }
-                };
-                
-                source.connect(processor);
-                processor.connect(audioContext.destination);
-                
-                isRecording = true;
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                
-                addMessage('info', { message: 'Recording started' });
-                
+                const data = await response.json();
+                addMessage('Eva', data.response);
+                const ttsResponse = await fetch('/text-to-speech', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: data.response }),
+                });
+                const audioBlob = await ttsResponse.blob();
+                const audioUrl = URL.createObjectURL(audioBlob);
+                audioPlayer.src = audioUrl;
+                audioPlayer.play();
             } catch (error) {
-                addMessage('error', { message: 'Failed to start recording', error: error.toString() });
+                addMessage('error', error.toString());
             }
+        }
+
+        startBtn.onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.start();
+            isRecording = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            statusDiv.textContent = 'Recording...';
+            audioChunks = [];
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
         };
-        
-        // Stop recording
+
         stopBtn.onclick = () => {
+            mediaRecorder.stop();
             isRecording = false;
-            
-            if (audioContext) {
-                audioContext.close();
-            }
-            
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'audioSessionEnd' }));
-            }
-            
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            
-            addMessage('info', { message: 'Recording stopped' });
+            statusDiv.textContent = 'Not recording';
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                const formData = new FormData();
+                formData.append('audio', audioBlob);
+                try {
+                    const response = await fetch('/transcribe', {
+                        method: 'POST',
+                        body: formData,
+                    });
+                    const data = await response.json();
+                    addMessage('You', data.transcription);
+                    sendToServer(data.transcription);
+                } catch (error) {
+                    addMessage('error', error.toString());
+                }
+            };
         };
-        
-        // Clear results
+
+        sendBtn.onclick = () => {
+            const text = textInput.value;
+            if (text) {
+                addMessage('You', text);
+                sendToServer(text);
+                textInput.value = '';
+            }
+        };
+
         clearBtn.onclick = () => {
             resultsDiv.innerHTML = '';
         };
-        
-        // Initialize connection on page load
-        window.onload = initializeConnection;
     </script>
 </body>
 </html>
