@@ -84,34 +84,35 @@ export class ShoppingToolHandlerNode extends CustomNode {
     for (const toolCall of content.toolCalls) {
       let toolResult;
       try {
+        const args = JSON.parse(toolCall.args);
         switch (toolCall.name) {
           case 'recommend_products':
-            toolResult = await ShoppingToolHandler.recommendProducts(toolCall.args);
+            toolResult = await ShoppingToolHandler.recommendProducts(args);
             productInfo.recommendations = toolResult.recommendations;
 
             break;
           case 'get_product_info':
-            toolResult = await ShoppingToolHandler.getProductInfo(toolCall.args);
+            toolResult = await ShoppingToolHandler.getProductInfo(args);
             productInfo.product_details = toolResult;
 
             break;
           case 'add_to_cart':
-            toolResult = await ShoppingToolHandler.addToCart(toolCall.args);
+            toolResult = await ShoppingToolHandler.addToCart(args);
             productInfo.cart_update = toolResult;
 
             break;
           case 'update_cart':
-            toolResult = await ShoppingToolHandler.updateCart(toolCall.args);
+            toolResult = await ShoppingToolHandler.updateCart(args);
             productInfo.cart_update = toolResult;
 
             break;
           case 'view_cart':
-            toolResult = await ShoppingToolHandler.viewCart(toolCall.args);
+            toolResult = await ShoppingToolHandler.viewCart(args);
             productInfo.cart_contents = toolResult;
 
             break;
           case 'checkout_order':
-            toolResult = await ShoppingToolHandler.checkoutOrder(toolCall.args);
+            toolResult = await ShoppingToolHandler.checkoutOrder(args);
             productInfo.order_result = toolResult;
 
             break;

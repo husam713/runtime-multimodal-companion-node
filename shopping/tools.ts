@@ -1,4 +1,3 @@
-import { Tool } from '@inworld/runtime/common';
 import { SAMPLE_PRODUCTS, Product } from './products';
 
 // In-memory storage for shopping carts (replace with a database in production)
@@ -253,7 +252,7 @@ export const ShoppingToolHandler = {
 };
 
 // Tool definitions for the LLM
-export const SHOPPING_TOOLS: Tool[] = [
+export const SHOPPING_TOOLS = [
   {
     name: 'recommend_products',
     description: 'Recommends products based on user queries, categories, and price ranges. Use for browsing or finding items.',
@@ -317,7 +316,7 @@ export const SHOPPING_TOOLS: Tool[] = [
     parameters: {
       type: 'object',
       properties: {},
-      required: [],
+      required: [] as const,
     },
   },
   {

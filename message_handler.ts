@@ -456,7 +456,7 @@ export class MessageHandler {
 
           const textPacket = EventFactory.text(JSON.stringify(response), interactionId, {
             isAgent: true,
-            name: 'User'
+            name: 'Agent'
           });
 
           this.send(textPacket);
