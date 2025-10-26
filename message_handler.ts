@@ -21,6 +21,7 @@ import {
 } from './types';
 import { EventFactory } from './event_factory';
 import { STTGraph } from './stt_graph';
+import { ShoppingGraph } from './shopping_graph';
 
 // Observability: track active executes to verify no unintended concurrency
 let STT_ACTIVE_EXECUTIONS = 0;
@@ -97,7 +98,8 @@ export class MessageHandler {
   }
 
   constructor(
-    private graph: STTGraph,
+    private sttGraph: STTGraph,
+    private shoppingGraph: ShoppingGraph,
     private vadClient: any,
     private send: (data: any) => void,
   ) {}
@@ -115,11 +117,11 @@ export class MessageHandler {
         } as TextInput;
 
         this.addToQueue(() =>
-          this.executeGraph({
+          this.executeShoppingGraph({
             key,
             input,
             interactionId,
-            graph: this.graph,
+            graph: this.shoppingGraph,
           }),
         );
 
@@ -256,11 +258,36 @@ export class MessageHandler {
           key,
           input,
           interactionId,
-          graph: this.graph,
+          graph: this.sttGraph,
         }),
       );
     } catch (error) {
       console.error('Error processing captured speech:', error.message);
+    }
+  }
+
+  private async executeShoppingGraph({
+    key,
+    input,
+    interactionId,
+    graph,
+  }: {
+    key: string;
+    input: TextInput;
+    interactionId: string;
+    graph: ShoppingGraph;
+  }) {
+    const executor = graph.executor;
+    const outputStream = await executor.start(input, v4());
+
+    try {
+      await this.handleResponse(
+        outputStream,
+        interactionId,
+      );
+    } finally {
+      this.send(EventFactory.interactionEnd(interactionId));
+      try { executor.closeExecution(outputStream); } catch {}
     }
   }
 
@@ -392,12 +419,20 @@ export class MessageHandler {
     const outputStream = await executor.start(input, v4());
 
     try {
-      await this.handleResponse(
-        outputStream,
+      const sttOutput = (await outputStream.next())
+        .data;
+
+      this.addToQueue(() => this.executeShoppingGraph({
+        key,
+        input: {
+          text: sttOutput,
+          interactionId,
+          key,
+        },
         interactionId,
-      );
+        graph: this.shoppingGraph,
+      }));
     } finally {
-      this.send(EventFactory.interactionEnd(interactionId));
       try { executor.closeExecution(outputStream); } catch {}
       STT_ACTIVE_EXECUTIONS--;
       logActive('STT', STT_ACTIVE_EXECUTIONS, interactionId);
@@ -409,16 +444,24 @@ export class MessageHandler {
     interactionId: string,
   ) {
     try {
-      const sttOutput = (await outputStream.next())
-        .data;
+      for await (const result of outputStream) {
+        if (result.data) {
+          const content = result.data.content;
+          const productInfo = result.data.productInfo;
 
-      console.log("TTS Stream:", sttOutput);
-      const textPacket = EventFactory.text(sttOutput, interactionId, {
-        isAgent: true,
-        name: 'User'
-      }); 
+          const response = {
+            text: content,
+            shopping_data: productInfo,
+          };
 
-      this.send(textPacket);
+          const textPacket = EventFactory.text(JSON.stringify(response), interactionId, {
+            isAgent: true,
+            name: 'User'
+          });
+
+          this.send(textPacket);
+        }
+      }
     } catch (error) {
       console.error(error);
       const errorPacket = EventFactory.error(error, interactionId);

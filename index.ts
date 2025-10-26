@@ -14,6 +14,7 @@ import { parse } from 'url';
 import { RawData } from 'ws';
 import { MessageHandler } from './message_handler';
 import { STTGraph } from './stt_graph';
+import { ShoppingGraph } from './shopping_graph';
 import { authMiddleware, verifyIncomingRequest } from './auth';
 dotenv.config();
 
@@ -37,6 +38,7 @@ app.use((req, res, next) => {
 
 let vadClient: any;
 let sttGraph: STTGraph;
+let shoppingGraph: ShoppingGraph;
 const connections: { [key: string]: { ws?: any } } = {};
 // Short-lived WS tokens issued after HTTP auth; validated during WS upgrade
 const wsTokens: { [sessionKey: string]: { token: string; expiresAt: number } } = {};
@@ -103,6 +105,7 @@ webSocket.on('connection', (ws, request) => {
 
   const messageHandler = new MessageHandler(
     sttGraph,
+    shoppingGraph,
     vadClient,
     (data: any) => ws.send(JSON.stringify(data))
   );
@@ -291,6 +294,9 @@ server.listen(PORT, async () => {
       connections: {},
     });
     console.log('STT Graph initialized');
+
+    shoppingGraph = await ShoppingGraph.create();
+    console.log('Shopping Graph initialized');
     
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`WebSocket available at ws://localhost:${PORT}/ws?key=<session_key>`);
@@ -306,6 +312,9 @@ process.on('SIGINT', () => {
   if (sttGraph) {
     sttGraph.destroy();
   }
+  if (shoppingGraph) {
+    shoppingGraph.destroy();
+  }
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
@@ -316,6 +325,9 @@ process.on('SIGTERM', () => {
   console.log('Shutting down server...');
   if (sttGraph) {
     sttGraph.destroy();
+  }
+  if (shoppingGraph) {
+    shoppingGraph.destroy();
   }
   server.close(() => {
     console.log('Server closed');
